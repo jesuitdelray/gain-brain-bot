@@ -77,21 +77,16 @@ async function saveToNotion(question, answer, followUp) {
   }
 }
 
-function getFollowUpMarkup(followUp) {
+function getReplyKeyboard(followUp) {
   return followUp
     ? {
         reply_markup: {
-          inline_keyboard: [
-            [
-              {
-                text: `🤔 ${followUp}`,
-                switch_inline_query_current_chat: followUp,
-              },
-            ],
-          ],
+          keyboard: [[{ text: followUp }]],
+          resize_keyboard: true,
+          one_time_keyboard: true,
         },
       }
-    : undefined;
+    : {};
 }
 
 bot.on("text", async (ctx) => {
@@ -104,7 +99,7 @@ bot.on("text", async (ctx) => {
       gpt.followUp ? `\n\n➡️ ${gpt.followUp}` : ""
     }`;
 
-    await ctx.reply(responseText, getFollowUpMarkup(gpt.followUp));
+    await ctx.reply(responseText, getReplyKeyboard(gpt.followUp));
     await saveToNotion(gpt.question, gpt.answer, gpt.followUp);
     console.log(`[${user}] ${gpt.question} => OK`);
   } catch (err) {
@@ -137,7 +132,7 @@ bot.on(["voice", "audio"], async (ctx) => {
       gpt.followUp ? `\n\n➡️ ${gpt.followUp}` : ""
     }`;
 
-    await ctx.reply(responseText, getFollowUpMarkup(gpt.followUp));
+    await ctx.reply(responseText, getReplyKeyboard(gpt.followUp));
     await saveToNotion(gpt.question, gpt.answer, gpt.followUp);
 
     const cost = ((duration / 60) * 0.006).toFixed(5);
@@ -150,4 +145,4 @@ bot.on(["voice", "audio"], async (ctx) => {
 });
 
 bot.launch();
-console.log("🤖 GainBrainBot is running with clickable follow-up links...");
+console.log("🤖 GainBrainBot is running with clean follow-up reply buttons...");
