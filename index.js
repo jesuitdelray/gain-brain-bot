@@ -51,7 +51,7 @@ Follow-up Question: ...
   };
 }
 
-async function saveToNotion(question, answer, followUp) {
+async function saveToNotion(question, answer, followUp, user) {
   try {
     await notion.pages.create({
       parent: { database_id: NOTION_DATABASE_ID },
@@ -67,6 +67,9 @@ async function saveToNotion(question, answer, followUp) {
               rich_text: [{ text: { content: followUp } }],
             }
           : undefined,
+        User: {
+          rich_text: [{ text: { content: user } }],
+        },
         Date: {
           date: { start: new Date().toISOString() },
         },
@@ -90,7 +93,11 @@ function getReplyKeyboard(followUp) {
 }
 
 bot.on("text", async (ctx) => {
-  const user = ctx.message.from.username || ctx.message.from.first_name;
+  const user =
+    ctx.message.from.username ||
+    `${ctx.message.from.first_name || ""} ${
+      ctx.message.from.last_name || ""
+    }`.trim();
   const input = ctx.message.text;
 
   try {
@@ -100,7 +107,7 @@ bot.on("text", async (ctx) => {
     }`;
 
     await ctx.reply(responseText, getReplyKeyboard(gpt.followUp));
-    await saveToNotion(gpt.question, gpt.answer, gpt.followUp);
+    await saveToNotion(gpt.question, gpt.answer, gpt.followUp, user);
     console.log(`[${user}] ${gpt.question} => OK`);
   } catch (err) {
     console.error("Text Msg Error:", err);
@@ -112,7 +119,11 @@ bot.on(["voice", "audio"], async (ctx) => {
   const fileId = ctx.message.voice?.file_id || ctx.message.audio?.file_id;
   const duration =
     ctx.message.voice?.duration || ctx.message.audio?.duration || 0;
-  const user = ctx.message.from.username || ctx.message.from.first_name;
+  const user =
+    ctx.message.from.username ||
+    `${ctx.message.from.first_name || ""} ${
+      ctx.message.from.last_name || ""
+    }`.trim();
 
   try {
     const file = await ctx.telegram.getFile(fileId);
@@ -133,7 +144,7 @@ bot.on(["voice", "audio"], async (ctx) => {
     }`;
 
     await ctx.reply(responseText, getReplyKeyboard(gpt.followUp));
-    await saveToNotion(gpt.question, gpt.answer, gpt.followUp);
+    await saveToNotion(gpt.question, gpt.answer, gpt.followUp, user);
 
     const cost = ((duration / 60) * 0.006).toFixed(5);
     console.log(`[${user}] 🎤 ${gpt.question} => OK`);
@@ -145,4 +156,6 @@ bot.on(["voice", "audio"], async (ctx) => {
 });
 
 bot.launch();
-console.log("🤖 GainBrainBot is running with clean follow-up reply buttons...");
+console.log(
+  "🤖 GainBrainBot is running with user logging + reply follow-up..."
+);
