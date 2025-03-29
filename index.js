@@ -81,7 +81,7 @@ function getReplyKeyboard(followUp) {
   return followUp
     ? {
         reply_markup: {
-          keyboard: [[{ text: followUp }]],
+          keyboard: [[{ text: "➡️ Ask follow-up" }]],
           resize_keyboard: true,
           one_time_keyboard: true,
         },
