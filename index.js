@@ -122,7 +122,7 @@ bot.command("start", async (ctx) => {
 
 bot.command("profile", async (ctx) => {
   const username = ctx.message.from.username || ctx.message.from.first_name;
-  const topic = userTopics.get(username) || "Not set";
+  const topic = ctx.session?.topic || "Not set";
 
   const response = await notion.databases.query({
     database_id: NOTION_DATABASE_ID,
@@ -181,6 +181,8 @@ bot.action("clear_stats", async (ctx) => {
     }
   }
 
+  ctx.session.topic = null;
+
   await ctx.reply("🧹 Your stats have been cleared.");
 });
 
@@ -237,6 +239,7 @@ bot.on("text", async (ctx) => {
     }
 
     userTopics.set(username, newTopic);
+    ctx.session.topic = newTopic;
     const firstQuestion = await askGPT("Let's start", newTopic);
     userSessions.set(username, { lastQuestion: firstQuestion });
     return ctx.reply(
@@ -250,6 +253,7 @@ bot.on("text", async (ctx) => {
 
   if (pendingTopicUsers.has(username) || !userTopics.has(username)) {
     userTopics.set(username, text);
+    ctx.session.topic = newTopic;
     pendingTopicUsers.delete(username);
 
     const firstQuestion = await askGPT(text);
@@ -293,6 +297,7 @@ bot.action("confirm_topic", async (ctx) => {
   const newTopic = ctx.session?.pendingTopic;
   if (newTopic) {
     userTopics.set(username, newTopic);
+    ctx.session.topic = newTopic;
     const firstQ = await askGPT("Let's start", newTopic);
     userSessions.set(username, { lastQuestion: firstQ });
     ctx.session.pendingTopic = null;
