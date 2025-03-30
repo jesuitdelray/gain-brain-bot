@@ -3,7 +3,7 @@ const axios = require("axios");
 const { Telegraf, Markup } = require("telegraf");
 const { OpenAI } = require("openai");
 const { Client } = require("@notionhq/client");
-const session = require("telegraf/session");
+const { session } = require("telegraf");
 require("dotenv").config();
 
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
