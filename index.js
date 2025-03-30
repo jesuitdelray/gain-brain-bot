@@ -160,6 +160,7 @@ bot.on("text", async (ctx) => {
   if (!topic) {
     topic = text;
     await setUserTopic(username, topic);
+    if (!ctx.session) ctx.session = {};
     ctx.session.topic = topic;
 
     const firstQ = await askGPT(topic);
