@@ -16,8 +16,6 @@ bot.use(session());
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-const userTopics = new Map();
-const userSessions = new Map();
 const pendingTopicUsers = new Set();
 
 async function askGPT(topic) {
@@ -77,7 +75,7 @@ bot.command("start", async (ctx) => {
 
 bot.command("profile", async (ctx) => {
   const username = ctx.message.from.username || ctx.message.from.first_name;
-  const topic = ctx.session?.topic || "Not set";
+  const topic = (await getUserTopic(username)) || "Not set";
 
   const records = await getUserStats(username);
   const total = records.length;
@@ -101,14 +99,22 @@ bot.command("profile", async (ctx) => {
 
 bot.action("change_topic", async (ctx) => {
   const username = ctx.from.username || ctx.from.first_name;
-  pendingTopicUsers.add(username);
+  console.log("User pressed change_topic:", username);
+
+  if (!ctx.session) ctx.session = {};
+  ctx.session.topic = null;
+  ctx.session.pendingTopic = true;
+
   await ctx.reply("✏️ Please enter a new topic (e.g., 'JavaScript basics'):");
 });
 
 bot.action("clear_stats", async (ctx) => {
   const username = ctx.from.username || ctx.from.first_name;
+  console.log("Clearing stats for:", username);
+
   await clearUserStats(username);
   if (!ctx.session) ctx.session = {};
+  ctx.session.pendingTopic = true;
   ctx.session.topic = null;
   await ctx.reply("🧹 Your stats have been cleared.");
 });
@@ -136,48 +142,24 @@ bot.on("text", async (ctx) => {
   const username = ctx.message.from.username || ctx.message.from.first_name;
   const text = ctx.message.text.trim();
 
-  if (text.toLowerCase().startsWith("/change")) {
-    const newTopic = text.replace("/change", "").trim();
-
-    if (!newTopic) {
-      return ctx.reply(
-        "❗️Please specify the topic after /change, for example: /change React"
-      );
-    }
-
-    const current = await getUserTopic(username);
-    if (current && current !== newTopic) {
-      ctx.session = { pendingTopic: newTopic };
-      return ctx.reply(
-        `❓ Do you want to switch to topic "${newTopic}"?`,
-        Markup.inlineKeyboard([
-          [Markup.button.callback("✅ Yes", "confirm_topic")],
-          [Markup.button.callback("❌ No", "cancel_topic")],
-        ])
-      );
-    }
-
+  if (ctx.session?.pendingTopic === true) {
+    const newTopic = text;
     await setUserTopic(username, newTopic);
-    if (!ctx.session) ctx.session = {};
     ctx.session.topic = newTopic;
+    ctx.session.pendingTopic = null;
 
-    const firstQuestion = await askGPT(newTopic);
-    await setUserLastQuestion(username, firstQuestion);
+    const firstQ = await askGPT(newTopic);
+    await setUserLastQuestion(username, firstQ);
 
     return ctx.reply(
-      `✅ Topic set to: ${newTopic}\n\n🧠 First Question: ${firstQuestion}`
+      `✅ Topic set to: ${newTopic}\n\n🧠 First Question: ${firstQ}`
     );
-  }
-
-  if (ctx.session?.pendingTopic) {
-    return ctx.reply("❗️Please confirm your topic using the buttons above.");
   }
 
   let topic = await getUserTopic(username);
   if (!topic) {
     topic = text;
     await setUserTopic(username, topic);
-    if (!ctx.session) ctx.session = {};
     ctx.session.topic = topic;
 
     const firstQ = await askGPT(topic);
