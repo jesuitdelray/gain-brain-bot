@@ -256,7 +256,7 @@ bot.on("text", async (ctx) => {
   if (pendingTopicUsers.has(username) || !userTopics.has(username)) {
     userTopics.set(username, text);
     if (!ctx.session) ctx.session = {};
-    ctx.session.topic = newTopic;
+    ctx.session.topic = text;
     pendingTopicUsers.delete(username);
 
     const firstQuestion = await askGPT(text);
