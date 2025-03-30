@@ -12,6 +12,7 @@ const NOTION_DATABASE_ID = process.env.NOTION_DATABASE_ID;
 
 const userTopics = new Map();
 const userSessions = new Map();
+const pendingTopicUsers = new Set();
 
 function truncate(str, length = 20) {
   return str.length > length ? str.slice(0, length - 1) + "…" : str;
@@ -136,14 +137,48 @@ bot.command("profile", async (ctx) => {
     (total || 1);
 
   await ctx.reply(
-    `👤 @${username}\n\n📊 Total Questions: ${total}\n🎯 Average Score: ${avg.toFixed(
-      1
-    )} / 10\n📚 Current Topic: ${topic}`,
+    `👤 @${username}
+  
+  📊 Total Questions: ${total}
+  🎯 Average Score: ${avg.toFixed(1)} / 10
+  📚 Current Topic: ${topic}`,
     Markup.inlineKeyboard([
       [Markup.button.callback("📈 Detailed Stats", "detailed")],
       [Markup.button.callback("🔁 Change Topic", "change_topic")],
+      [Markup.button.callback("🧹 Clear Stats", "clear_stats")],
     ])
   );
+});
+
+bot.action("change_topic", async (ctx) => {
+  const username = ctx.from.username || ctx.from.first_name;
+  pendingTopicUsers.add(username);
+  await ctx.reply("✏️ Please enter a new topic (e.g., 'JavaScript basics'):");
+});
+
+bot.action("clear_stats", async (ctx) => {
+  const username = ctx.from.username || ctx.from.first_name;
+
+  const response = await notion.databases.query({
+    database_id: NOTION_DATABASE_ID,
+    filter: {
+      property: "User",
+      rich_text: { equals: username },
+    },
+  });
+
+  for (const page of response.results) {
+    try {
+      await notion.pages.update({
+        page_id: page.id,
+        archived: true,
+      });
+    } catch (err) {
+      console.error("❌ Error archiving page:", err.message);
+    }
+  }
+
+  await ctx.reply("🧹 Your stats have been cleared.");
 });
 
 bot.action("detailed", async (ctx) => {
