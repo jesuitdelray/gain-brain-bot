@@ -1,18 +1,20 @@
 require("dotenv").config();
 const { Telegraf, Markup, session } = require("telegraf");
 const { OpenAI } = require("openai");
-const mongoose = require("mongoose");
-const { UserStat } = require("./db");
+const {
+  getUserTopic,
+  setUserTopic,
+  getUserLastQuestion,
+  setUserLastQuestion,
+  saveAnswer,
+  getUserStats,
+  clearUserStats,
+} = require("./db");
 
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 bot.use(session());
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-
-mongoose.connect(process.env.MONGODB_URI, {
-  useNewUrlParser: true,
-  useUnifiedTopology: true,
-});
 
 const userTopics = new Map();
 const userSessions = new Map();
@@ -69,30 +71,6 @@ async function evaluateAnswer(question, userAnswer, topic) {
   return { score, correct, next };
 }
 
-async function saveToMongo({
-  username,
-  question,
-  userAnswer,
-  correct,
-  score,
-  topic,
-}) {
-  try {
-    const stat = new UserStat({
-      username,
-      question,
-      answer: userAnswer,
-      correctAnswer: correct,
-      score,
-      topic,
-      date: new Date(),
-    });
-    await stat.save();
-  } catch (err) {
-    console.error("❌ Mongo save error:", err.message);
-  }
-}
-
 bot.command("start", async (ctx) => {
   await ctx.reply("Welcome! Please enter a topic you'd like to learn.");
 });
@@ -101,7 +79,7 @@ bot.command("profile", async (ctx) => {
   const username = ctx.message.from.username || ctx.message.from.first_name;
   const topic = ctx.session?.topic || "Not set";
 
-  const records = await UserStat.find({ username });
+  const records = await getUserStats(username);
   const total = records.length;
   const avg =
     records.reduce((sum, r) => sum + (r.score || 0), 0) / (total || 1);
@@ -129,7 +107,7 @@ bot.action("change_topic", async (ctx) => {
 
 bot.action("clear_stats", async (ctx) => {
   const username = ctx.from.username || ctx.from.first_name;
-  await UserStat.deleteMany({ username });
+  await clearUserStats(username);
   if (!ctx.session) ctx.session = {};
   ctx.session.topic = null;
   await ctx.reply("🧹 Your stats have been cleared.");
@@ -137,7 +115,7 @@ bot.action("clear_stats", async (ctx) => {
 
 bot.action("detailed", async (ctx) => {
   const username = ctx.from.username || ctx.from.first_name;
-  const records = await UserStat.find({ username });
+  const records = await getUserStats(username);
 
   const grouped = {};
   for (const r of records) {
@@ -167,7 +145,7 @@ bot.on("text", async (ctx) => {
       );
     }
 
-    const current = userTopics.get(username);
+    const current = await getUserTopic(username);
     if (current && current !== newTopic) {
       ctx.session = { pendingTopic: newTopic };
       return ctx.reply(
@@ -179,12 +157,12 @@ bot.on("text", async (ctx) => {
       );
     }
 
-    userTopics.set(username, newTopic);
+    await setUserTopic(username, newTopic);
     if (!ctx.session) ctx.session = {};
     ctx.session.topic = newTopic;
 
     const firstQuestion = await askGPT(newTopic);
-    userSessions.set(username, { lastQuestion: firstQuestion });
+    await setUserLastQuestion(username, firstQuestion);
 
     return ctx.reply(
       `✅ Topic set to: ${newTopic}\n\n🧠 First Question: ${firstQuestion}`
@@ -195,28 +173,26 @@ bot.on("text", async (ctx) => {
     return ctx.reply("❗️Please confirm your topic using the buttons above.");
   }
 
-  if (pendingTopicUsers.has(username) || !userTopics.has(username)) {
-    userTopics.set(username, text);
+  let topic = await getUserTopic(username);
+  if (!topic) {
+    topic = text;
+    await setUserTopic(username, topic);
     if (!ctx.session) ctx.session = {};
-    ctx.session.topic = text;
-    pendingTopicUsers.delete(username);
+    ctx.session.topic = topic;
 
-    const firstQuestion = await askGPT(text);
-    userSessions.set(username, { lastQuestion: firstQuestion });
+    const firstQ = await askGPT(topic);
+    await setUserLastQuestion(username, firstQ);
 
     return ctx.reply(
-      `✅ Topic set to: ${text}\n\n🧠 First Question: ${firstQuestion}`
+      `✅ Topic set to: ${topic}\n\n🧠 First Question: ${firstQ}`
     );
   }
 
-  const topic = userTopics.get(username);
-  const session = userSessions.get(username) || { lastQuestion: "" };
-  const prevQ = session.lastQuestion;
-
+  const prevQ = await getUserLastQuestion(username);
   if (!prevQ) {
-    const newQ = await askGPT(topic);
-    userSessions.set(username, { lastQuestion: newQ });
-    return ctx.reply(`🧠 ${newQ}`);
+    const q = await askGPT(topic);
+    await setUserLastQuestion(username, q);
+    return ctx.reply(`🧠 ${q}`);
   }
 
   const { score, correct, next } = await evaluateAnswer(prevQ, text, topic);
@@ -225,28 +201,27 @@ bot.on("text", async (ctx) => {
     `✅ Score: ${score}/10\n\n✅ Correct: ${correct}\n\n🧠 Next: ${next}`
   );
 
-  await saveToMongo({
-    username,
+  await saveAnswer(username, {
     question: prevQ,
-    userAnswer: text,
-    correct,
+    answer: text,
+    correctAnswer: correct,
     score,
     topic,
   });
 
-  userSessions.set(username, { lastQuestion: next });
+  await setUserLastQuestion(username, next);
 });
 
 bot.action("confirm_topic", async (ctx) => {
   const username = ctx.from.username || ctx.from.first_name;
   const newTopic = ctx.session?.pendingTopic;
   if (newTopic) {
-    userTopics.set(username, newTopic);
+    await setUserTopic(username, newTopic);
     if (!ctx.session) ctx.session = {};
     ctx.session.topic = newTopic;
 
     const firstQ = await askGPT(newTopic);
-    userSessions.set(username, { lastQuestion: firstQ });
+    await setUserLastQuestion(username, firstQ);
     ctx.session.pendingTopic = null;
 
     await ctx.reply(
