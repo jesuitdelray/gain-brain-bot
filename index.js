@@ -139,13 +139,10 @@ bot.command("profile", async (ctx) => {
     (total || 1);
 
   await ctx.reply(
-    ` 👤 @${username}
-      
-      📊 Total Questions: ${total}
-
-      🎯 Average Score: ${avg.toFixed(1)} / 10
-
-      📚 Current Topic: ${topic}`,
+    `👤 @${username}\n\n` +
+      `📊 Total Questions: ${total}\n` +
+      `🎯 Average Score: ${avg.toFixed(1)} / 10\n` +
+      `📚 Current Topic: ${topic}`,
     Markup.inlineKeyboard([
       [
         Markup.button.callback("📈 Detailed Stats", "detailed"),
