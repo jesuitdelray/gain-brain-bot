@@ -173,20 +173,46 @@ bot.action("detailed", async (ctx) => {
   await ctx.reply(`🔍 Topic Breakdown:\n\n${lines.join("\n")}`);
 });
 
-bot.action("change_topic", async (ctx) => {
-  const username = ctx.from.username || ctx.from.first_name;
-  userTopics.delete(username);
-  userSessions.delete(username);
-  await ctx.reply("✏️ Enter a new topic (e.g., 'JavaScript Basics'):");
-});
-
 bot.on("text", async (ctx) => {
   const username = ctx.message.from.username || ctx.message.from.first_name;
   const text = ctx.message.text.trim();
 
+  if (text.toLowerCase().startsWith("/change")) {
+    const newTopic = text.replace("/change", "").trim();
+
+    if (!newTopic) {
+      return ctx.reply(
+        "❗️Please specify the topic after /change, for example: /change React"
+      );
+    }
+
+    const current = userTopics.get(username);
+    if (current && current !== newTopic) {
+      ctx.session = { pendingTopic: newTopic };
+      return ctx.reply(
+        `❓ Do you want to switch to topic "${newTopic}"?`,
+        Markup.inlineKeyboard([
+          [Markup.button.callback("✅ Yes", "confirm_topic")],
+          [Markup.button.callback("❌ No", "cancel_topic")],
+        ])
+      );
+    }
+
+    userTopics.set(username, newTopic);
+    const firstQuestion = await askGPT("Let's start", newTopic);
+    userSessions.set(username, { lastQuestion: firstQuestion });
+    return ctx.reply(
+      `✅ Topic set to: ${newTopic}\n\n🧠 First Question: ${firstQuestion}`
+    );
+  }
+
+  if (ctx.session?.pendingTopic) {
+    return ctx.reply("❗️Please confirm your topic using the buttons above.");
+  }
+
   if (!userTopics.has(username)) {
     userTopics.set(username, text);
-    const firstQuestion = await askGPT(text);
+    const firstQuestion = await askGPT("Let's start", text);
     userSessions.set(username, { lastQuestion: firstQuestion });
     return ctx.reply(
       `✅ Topic set to: ${text}\n\n🧠 First Question: ${firstQuestion}`
@@ -198,7 +224,7 @@ bot.on("text", async (ctx) => {
   const prevQ = session.lastQuestion;
 
   if (!prevQ) {
-    const newQ = await askGPT(topic);
+    const newQ = await askGPT("Let's continue", topic);
     userSessions.set(username, { lastQuestion: newQ });
     return ctx.reply(`🧠 ${newQ}`);
   }
@@ -219,6 +245,25 @@ bot.on("text", async (ctx) => {
   });
 
   userSessions.set(username, { lastQuestion: next });
+});
+
+bot.action("confirm_topic", async (ctx) => {
+  const username = ctx.from.username || ctx.from.first_name;
+  const newTopic = ctx.session?.pendingTopic;
+  if (newTopic) {
+    userTopics.set(username, newTopic);
+    const firstQ = await askGPT("Let's start", newTopic);
+    userSessions.set(username, { lastQuestion: firstQ });
+    ctx.session.pendingTopic = null;
+    await ctx.reply(
+      `✅ Topic set to: ${newTopic}\n\n🧠 First Question: ${firstQ}`
+    );
+  }
+});
+
+bot.action("cancel_topic", async (ctx) => {
+  ctx.session.pendingTopic = null;
+  await ctx.reply("✏️ Please, write your topic for study.");
 });
 
 bot.launch();
