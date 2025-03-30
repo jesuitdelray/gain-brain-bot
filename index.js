@@ -1,45 +1,38 @@
-const fs = require("fs");
-const axios = require("axios");
-const { Telegraf, Markup } = require("telegraf");
-const { OpenAI } = require("openai");
-const { Client } = require("@notionhq/client");
-const { session } = require("telegraf");
 require("dotenv").config();
+const { Telegraf, Markup, session } = require("telegraf");
+const { OpenAI } = require("openai");
+const mongoose = require("mongoose");
+const { UserStat } = require("./models");
 
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-const notion = new Client({ auth: process.env.NOTION_TOKEN });
-const NOTION_DATABASE_ID = process.env.NOTION_DATABASE_ID;
 bot.use(session());
+
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+mongoose.connect(process.env.MONGODB_URI, {
+  useNewUrlParser: true,
+  useUnifiedTopology: true,
+});
 
 const userTopics = new Map();
 const userSessions = new Map();
 const pendingTopicUsers = new Set();
 
-function truncate(str, length = 20) {
-  return str.length > length ? str.slice(0, length - 1) + "…" : str;
-}
-
 async function askGPT(topic) {
   const messages = [
     {
       role: "system",
-      content: `
-You are a quiz bot helping users learn about "${topic}".
-Ask short, specific questions.
-Respond using the following format:
-QUESTION: ...
-`,
+      content: `You are a quiz bot helping users learn about "${topic}". Ask short, specific questions. Respond using the format:\nQUESTION: ...`,
     },
     { role: "user", content: "Start quiz" },
   ];
 
-  const chatResponse = await openai.chat.completions.create({
-    messages,
+  const res = await openai.chat.completions.create({
     model: "gpt-4o-mini",
+    messages,
   });
 
-  const text = chatResponse.choices[0].message.content.trim();
+  const text = res.choices[0].message.content.trim();
   const match = text.match(/QUESTION:\s*(.*)/i);
   return match ? match[1].trim() : text;
 }
@@ -48,49 +41,35 @@ async function evaluateAnswer(question, userAnswer, topic) {
   const messages = [
     {
       role: "system",
-      content: `
-Evaluate the user's answer to the question "${question}" on topic "${topic}".
-Respond with:
-SCORE: (0-10)
-CORRECT ANSWER: ...
-NEXT QUESTION: ...
-`,
+      content: `Evaluate the user's answer to "${question}" on "${topic}". Respond strictly in format:\nSCORE: (0-10)\nCORRECT ANSWER: ...\nNEXT QUESTION: ...`,
     },
     { role: "user", content: userAnswer },
   ];
 
-  const chatResponse = await openai.chat.completions.create({
-    messages,
+  const res = await openai.chat.completions.create({
     model: "gpt-4o-mini",
+    messages,
   });
 
-  let text = chatResponse.choices[0].message.content.trim();
+  let text = res.choices[0].message.content.trim();
 
   if (!/SCORE:/i.test(text) || !/CORRECT ANSWER:/i.test(text)) {
-    const repairPrompt = `
-You did not follow the format correctly. Please strictly reply in this format:
-
-SCORE: (0-10)
-CORRECT ANSWER: ...
-NEXT QUESTION: ...
-
-Now fix the previous answer for the question: "${question}" and user answer: "${userAnswer}"
-    `;
+    const repairPrompt = `You did not follow the format. Reformat your response for question "${question}" and user answer "${userAnswer}" correctly.`;
     const retry = await openai.chat.completions.create({
-      messages: [{ role: "user", content: repairPrompt }],
       model: "gpt-4o-mini",
+      messages: [{ role: "user", content: repairPrompt }],
     });
     text = retry.choices[0].message.content.trim();
   }
 
   const score = parseInt(text.match(/SCORE:\s*(\d+)/i)?.[1] || 0);
-
   const correct = text.match(/CORRECT ANSWER:\s*(.*)/i)?.[1]?.trim() || "";
   const next = text.match(/NEXT QUESTION:\s*(.*)/i)?.[1]?.trim() || "";
 
   return { score, correct, next };
 }
-async function saveToNotion({
+
+async function saveToMongo({
   username,
   question,
   userAnswer,
@@ -99,20 +78,18 @@ async function saveToNotion({
   topic,
 }) {
   try {
-    await notion.pages.create({
-      parent: { database_id: NOTION_DATABASE_ID },
-      properties: {
-        User: { rich_text: [{ text: { content: username } }] },
-        Question: { title: [{ text: { content: question } }] },
-        Answer: { rich_text: [{ text: { content: userAnswer } }] },
-        CorrectAnswer: { rich_text: [{ text: { content: correct } }] },
-        Score: { number: score },
-        Topic: { rich_text: [{ text: { content: topic } }] },
-        Date: { date: { start: new Date().toISOString() } },
-      },
+    const stat = new UserStat({
+      username,
+      question,
+      answer: userAnswer,
+      correctAnswer: correct,
+      score,
+      topic,
+      date: new Date(),
     });
+    await stat.save();
   } catch (err) {
-    console.error("❌ Notion save error:", err.message);
+    console.error("❌ Mongo save error:", err.message);
   }
 }
 
@@ -124,19 +101,10 @@ bot.command("profile", async (ctx) => {
   const username = ctx.message.from.username || ctx.message.from.first_name;
   const topic = ctx.session?.topic || "Not set";
 
-  const response = await notion.databases.query({
-    database_id: NOTION_DATABASE_ID,
-    filter: {
-      property: "User",
-      rich_text: { equals: username },
-    },
-  });
-
-  const pages = response.results;
-  const total = pages.length;
+  const records = await UserStat.find({ username });
+  const total = records.length;
   const avg =
-    pages.reduce((sum, p) => sum + (p.properties.Score?.number || 0), 0) /
-    (total || 1);
+    records.reduce((sum, r) => sum + (r.score || 0), 0) / (total || 1);
 
   await ctx.reply(
     `👤 @${username}\n\n` +
@@ -161,50 +129,22 @@ bot.action("change_topic", async (ctx) => {
 
 bot.action("clear_stats", async (ctx) => {
   const username = ctx.from.username || ctx.from.first_name;
-
-  const response = await notion.databases.query({
-    database_id: NOTION_DATABASE_ID,
-    filter: {
-      property: "User",
-      rich_text: { equals: username },
-    },
-  });
-
-  for (const page of response.results) {
-    try {
-      await notion.pages.update({
-        page_id: page.id,
-        archived: true,
-      });
-    } catch (err) {
-      console.error("❌ Error archiving page:", err.message);
-    }
-  }
-
+  await UserStat.deleteMany({ username });
   if (!ctx.session) ctx.session = {};
   ctx.session.topic = null;
-
   await ctx.reply("🧹 Your stats have been cleared.");
 });
 
 bot.action("detailed", async (ctx) => {
   const username = ctx.from.username || ctx.from.first_name;
-  const res = await notion.databases.query({
-    database_id: NOTION_DATABASE_ID,
-    filter: {
-      property: "User",
-      rich_text: { equals: username },
-    },
-  });
+  const records = await UserStat.find({ username });
 
   const grouped = {};
-  res.results.forEach((p) => {
-    const topic =
-      p.properties.Topic?.rich_text?.[0]?.text?.content || "Unknown";
-    const score = p.properties.Score?.number || 0;
+  for (const r of records) {
+    const topic = r.topic || "Unknown";
     if (!grouped[topic]) grouped[topic] = [];
-    grouped[topic].push(score);
-  });
+    grouped[topic].push(r.score || 0);
+  }
 
   const lines = Object.entries(grouped).map(([t, scores]) => {
     const avg = scores.reduce((a, b) => a + b, 0) / scores.length;
@@ -242,8 +182,10 @@ bot.on("text", async (ctx) => {
     userTopics.set(username, newTopic);
     if (!ctx.session) ctx.session = {};
     ctx.session.topic = newTopic;
-    const firstQuestion = await askGPT("Let's start", newTopic);
+
+    const firstQuestion = await askGPT(newTopic);
     userSessions.set(username, { lastQuestion: firstQuestion });
+
     return ctx.reply(
       `✅ Topic set to: ${newTopic}\n\n🧠 First Question: ${firstQuestion}`
     );
@@ -272,7 +214,7 @@ bot.on("text", async (ctx) => {
   const prevQ = session.lastQuestion;
 
   if (!prevQ) {
-    const newQ = await askGPT("Let's continue", topic);
+    const newQ = await askGPT(topic);
     userSessions.set(username, { lastQuestion: newQ });
     return ctx.reply(`🧠 ${newQ}`);
   }
@@ -283,7 +225,7 @@ bot.on("text", async (ctx) => {
     `✅ Score: ${score}/10\n\n✅ Correct: ${correct}\n\n🧠 Next: ${next}`
   );
 
-  await saveToNotion({
+  await saveToMongo({
     username,
     question: prevQ,
     userAnswer: text,
@@ -302,9 +244,11 @@ bot.action("confirm_topic", async (ctx) => {
     userTopics.set(username, newTopic);
     if (!ctx.session) ctx.session = {};
     ctx.session.topic = newTopic;
-    const firstQ = await askGPT("Let's start", newTopic);
+
+    const firstQ = await askGPT(newTopic);
     userSessions.set(username, { lastQuestion: firstQ });
     ctx.session.pendingTopic = null;
+
     await ctx.reply(
       `✅ Topic set to: ${newTopic}\n\n🧠 First Question: ${firstQ}`
     );
@@ -317,6 +261,4 @@ bot.action("cancel_topic", async (ctx) => {
 });
 
 bot.launch();
-console.log(
-  "🤖 GainBrainBot running with smart sessions, retry, Notion, and stats..."
-);
+console.log("🤖 GainBrainBot running with MongoDB, GPT quiz, and stats!");
