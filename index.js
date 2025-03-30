@@ -181,6 +181,7 @@ bot.action("clear_stats", async (ctx) => {
     }
   }
 
+  if (!ctx.session) ctx.session = {};
   ctx.session.topic = null;
 
   await ctx.reply("🧹 Your stats have been cleared.");
