@@ -6,11 +6,11 @@ const { Client } = require("@notionhq/client");
 const session = require("telegraf/session");
 require("dotenv").config();
 
-bot.use(session());
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const notion = new Client({ auth: process.env.NOTION_TOKEN });
 const NOTION_DATABASE_ID = process.env.NOTION_DATABASE_ID;
+bot.use(session());
 
 const userTopics = new Map();
 const userSessions = new Map();
