@@ -1,6 +1,6 @@
 const fs = require("fs");
 const axios = require("axios");
-const { Telegraf } = require("telegraf");
+const { Telegraf, Markup } = require("telegraf");
 const { OpenAI } = require("openai");
 const { Client } = require("@notionhq/client");
 require("dotenv").config();
@@ -8,141 +8,188 @@ require("dotenv").config();
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const notion = new Client({ auth: process.env.NOTION_TOKEN });
-
 const NOTION_DATABASE_ID = process.env.NOTION_DATABASE_ID;
 
-async function askGPT(question) {
+const userTopics = new Map();
+
+function truncate(str, length = 20) {
+  return str.length > length ? str.slice(0, length - 1) + "…" : str;
+}
+
+async function askGPT(question, topic) {
+  const messages = [
+    {
+      role: "system",
+      content: `
+You are a quiz bot helping users learn about "${topic}".
+Ask short, specific questions.
+Respond using the following format:
+QUESTION: ...
+`,
+    },
+    { role: "user", content: question },
+  ];
+
   const chatResponse = await openai.chat.completions.create({
-    messages: [
-      {
-        role: "system",
-        content: `
-I want to train my brain and make it smarter by asking deep questions like "why", "how", "what", and "when".
-
-Respond with:
-- a short, precise, fact-based answer in clear, scientific language.
-- no fluff or oversimplification — be concise but meaningful.
-- include one thought-provoking follow-up question that builds on the answer to keep thinking going.
-
-All responses must be in simple but not childish language.
-
-Use the following format:
-Question: ...
-Answer: ...
-Follow-up Question: ...
-        `,
-      },
-      { role: "user", content: question },
-    ],
+    messages,
     model: "gpt-4o-mini",
   });
 
   const text = chatResponse.choices[0].message.content.trim();
-
-  const qMatch = text.match(/Question:\s*(.+)/i);
-  const aMatch = text.match(/Answer:\s*(.+)/i);
-  const fMatch = text.match(/Follow-up Question:\s*(.+)/i);
-
-  return {
-    question: qMatch?.[1]?.trim() || question,
-    answer: aMatch?.[1]?.trim() || text,
-    followUp: fMatch?.[1]?.trim() || null,
-    raw: text,
-  };
+  const match = text.match(/QUESTION:\s*(.*)/i);
+  return match ? match[1].trim() : text;
 }
 
-async function saveToNotion(question, answer, followUp) {
+async function evaluateAnswer(question, userAnswer, topic) {
+  const messages = [
+    {
+      role: "system",
+      content: `
+Evaluate the user's answer to the previous question on topic "${topic}".
+Respond with:
+SCORE: (0-10)
+CORRECT ANSWER: ...
+NEXT QUESTION: ...
+`,
+    },
+    { role: "user", content: userAnswer },
+  ];
+
+  const chatResponse = await openai.chat.completions.create({
+    messages,
+    model: "gpt-4o-mini",
+  });
+
+  const text = chatResponse.choices[0].message.content.trim();
+  const score = parseInt(text.match(/SCORE:\s*(\d+)/i)?.[1] || 0);
+  const correct = text.match(/CORRECT ANSWER:\s*(.*)/i)?.[1]?.trim();
+  const next = text.match(/NEXT QUESTION:\s*(.*)/i)?.[1]?.trim();
+
+  return { score, correct, next };
+}
+
+async function saveToNotion({
+  username,
+  question,
+  userAnswer,
+  correct,
+  score,
+  topic,
+}) {
   try {
     await notion.pages.create({
       parent: { database_id: NOTION_DATABASE_ID },
       properties: {
-        Question: {
-          title: [{ text: { content: question } }],
-        },
-        Answer: {
-          rich_text: [{ text: { content: answer } }],
-        },
-        FollowUp: followUp
-          ? {
-              rich_text: [{ text: { content: followUp } }],
-            }
-          : undefined,
-        Date: {
-          date: { start: new Date().toISOString() },
-        },
+        User: { rich_text: [{ text: { content: username } }] },
+        Question: { title: [{ text: { content: question } }] },
+        Answer: { rich_text: [{ text: { content: userAnswer } }] },
+        CorrectAnswer: { rich_text: [{ text: { content: correct } }] },
+        Score: { number: score },
+        Topic: { rich_text: [{ text: { content: topic } }] },
+        Date: { date: { start: new Date().toISOString() } },
       },
     });
   } catch (err) {
-    console.error("❌ Notion save error:", JSON.stringify(err, null, 2));
+    console.error("❌ Notion save error:", err.message);
   }
 }
 
-function getReplyKeyboard(followUp) {
-  return followUp
-    ? {
-        reply_markup: {
-          keyboard: [[{ text: followUp }]],
-          resize_keyboard: true,
-          one_time_keyboard: true,
-        },
-      }
-    : {};
-}
-
-bot.on("text", async (ctx) => {
-  const user = ctx.message.from.username || ctx.message.from.first_name;
-  const input = ctx.message.text;
-
-  try {
-    const gpt = await askGPT(input);
-    const responseText = `💬 ${gpt.answer}${
-      gpt.followUp ? `\n\n➡️ ${gpt.followUp}` : ""
-    }`;
-
-    await ctx.reply(responseText, getReplyKeyboard(gpt.followUp));
-    await saveToNotion(gpt.question, gpt.answer, gpt.followUp);
-    console.log(`[${user}] ${gpt.question} => OK`);
-  } catch (err) {
-    console.error("Text Msg Error:", err);
-    await ctx.reply("❌ Something went wrong.");
-  }
+bot.command("start", async (ctx) => {
+  await ctx.reply("Welcome! Please enter a topic you'd like to learn.");
 });
 
-bot.on(["voice", "audio"], async (ctx) => {
-  const fileId = ctx.message.voice?.file_id || ctx.message.audio?.file_id;
-  const duration =
-    ctx.message.voice?.duration || ctx.message.audio?.duration || 0;
-  const user = ctx.message.from.username || ctx.message.from.first_name;
+bot.command("profile", async (ctx) => {
+  const username = ctx.message.from.username || ctx.message.from.first_name;
+  const topic = userTopics.get(username) || "Not set";
 
-  try {
-    const file = await ctx.telegram.getFile(fileId);
-    const fileUrl = `https://api.telegram.org/file/bot${process.env.TELEGRAM_BOT_TOKEN}/${file.file_path}`;
+  const response = await notion.databases.query({
+    database_id: NOTION_DATABASE_ID,
+    filter: {
+      property: "User",
+      rich_text: { equals: username },
+    },
+  });
 
-    const response = await axios.get(fileUrl, { responseType: "arraybuffer" });
-    fs.writeFileSync("voice.ogg", response.data);
+  const pages = response.results;
+  const total = pages.length;
+  const avg =
+    pages.reduce((sum, p) => sum + (p.properties.Score?.number || 0), 0) /
+    (total || 1);
 
-    const transcription = await openai.audio.transcriptions.create({
-      file: fs.createReadStream("voice.ogg"),
-      model: "whisper-1",
-    });
+  await ctx.reply(
+    `👤 @${username}
 
-    const question = transcription.text;
-    const gpt = await askGPT(question);
-    const responseText = `💬 ${gpt.answer}${
-      gpt.followUp ? `\n\n➡️ ${gpt.followUp}` : ""
-    }`;
+📊 Total Questions: ${total}
+🎯 Average Score: ${avg.toFixed(1)} / 10
+📚 Current Topic: ${topic}`,
+    Markup.inlineKeyboard([
+      [Markup.button.callback("📈 Detailed Stats", "detailed")],
+      [Markup.button.callback("🔁 Change Topic", "change_topic")],
+    ])
+  );
+});
 
-    await ctx.reply(responseText, getReplyKeyboard(gpt.followUp));
-    await saveToNotion(gpt.question, gpt.answer, gpt.followUp);
+bot.action("detailed", async (ctx) => {
+  const username = ctx.from.username || ctx.from.first_name;
+  const res = await notion.databases.query({
+    database_id: NOTION_DATABASE_ID,
+    filter: {
+      property: "User",
+      rich_text: { equals: username },
+    },
+  });
 
-    const cost = ((duration / 60) * 0.006).toFixed(5);
-    console.log(`[${user}] 🎤 ${gpt.question} => OK`);
-    console.log(`⏱ Duration: ${duration}s, 💸 Whisper cost: $${cost}`);
-  } catch (err) {
-    console.error("Voice Msg Error:", err);
-    await ctx.reply("❌ Could not process voice.");
+  const grouped = {};
+  res.results.forEach((p) => {
+    const topic =
+      p.properties.Topic?.rich_text?.[0]?.text?.content || "Unknown";
+    const score = p.properties.Score?.number || 0;
+    if (!grouped[topic]) grouped[topic] = [];
+    grouped[topic].push(score);
+  });
+
+  const lines = Object.entries(grouped).map(([t, scores]) => {
+    const avg = scores.reduce((a, b) => a + b, 0) / scores.length;
+    return `${t} — ${avg.toFixed(0)}%`;
+  });
+
+  await ctx.reply(`🔍 Topic Breakdown:\n\n${lines.join("\n")}`);
+});
+
+bot.action("change_topic", async (ctx) => {
+  await ctx.reply("✏️ Enter a new topic (e.g., 'React Basics'):");
+});
+
+bot.on("text", async (ctx) => {
+  const username = ctx.message.from.username || ctx.message.from.first_name;
+  const text = ctx.message.text.trim();
+
+  if (!userTopics.has(username)) {
+    userTopics.set(username, text);
+    return ctx.reply(`✅ Topic set to: ${text}\nType anything to begin.`);
   }
+
+  const topic = userTopics.get(username);
+
+  if (/score:/i.test(text)) return;
+
+  const previous = ctx.session?.lastQuestion || "";
+  const evalResult = await evaluateAnswer(previous, text, topic);
+  await ctx.reply(
+    `✅ Score: ${evalResult.score}/10\n✅ Correct: ${evalResult.correct}\n\n🧠 Next: ${evalResult.next}`
+  );
+
+  await saveToNotion({
+    username,
+    question: previous,
+    userAnswer: text,
+    correct: evalResult.correct,
+    score: evalResult.score,
+    topic,
+  });
+
+  ctx.session = { lastQuestion: evalResult.next };
 });
 
 bot.launch();
-console.log("🤖 GainBrainBot is running with clean follow-up reply buttons...");
+console.log("🤖 GainBrainBot running with profile, topic and stats support...");
