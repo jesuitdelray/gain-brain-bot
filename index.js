@@ -139,10 +139,12 @@ bot.command("profile", async (ctx) => {
     (total || 1);
 
   await ctx.reply(
-    `👤 @${username}
+    ` 👤 @${username}
       
       📊 Total Questions: ${total}
+
       🎯 Average Score: ${avg.toFixed(1)} / 10
+
       📚 Current Topic: ${topic}`,
     Markup.inlineKeyboard([
       [
@@ -249,10 +251,13 @@ bot.on("text", async (ctx) => {
     return ctx.reply("❗️Please confirm your topic using the buttons above.");
   }
 
-  if (!userTopics.has(username)) {
+  if (pendingTopicUsers.has(username) || !userTopics.has(username)) {
     userTopics.set(username, text);
-    const firstQuestion = await askGPT("Let's start", text);
+    pendingTopicUsers.delete(username);
+
+    const firstQuestion = await askGPT(text);
     userSessions.set(username, { lastQuestion: firstQuestion });
+
     return ctx.reply(
       `✅ Topic set to: ${text}\n\n🧠 First Question: ${firstQuestion}`
     );
