@@ -2,7 +2,7 @@ require("dotenv").config();
 const { Telegraf, Markup, session } = require("telegraf");
 const { OpenAI } = require("openai");
 const mongoose = require("mongoose");
-const { UserStat } = require("./models");
+const { UserStat } = require("./db");
 
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 bot.use(session());
