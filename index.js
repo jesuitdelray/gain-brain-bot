@@ -184,7 +184,6 @@ bot.on("text", async (ctx) => {
   const username = ctx.message.from.username || ctx.message.from.first_name;
   const text = ctx.message.text.trim();
 
-  // Установка темы
   if (!userTopics.has(username)) {
     userTopics.set(username, text);
     const firstQuestion = await askGPT(text);
@@ -194,7 +193,6 @@ bot.on("text", async (ctx) => {
     );
   }
 
-  // Ответ на вопрос
   const topic = userTopics.get(username);
   const session = userSessions.get(username) || { lastQuestion: "" };
   const prevQ = session.lastQuestion;
