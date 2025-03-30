@@ -273,7 +273,7 @@ bot.on("text", async (ctx) => {
   const { score, correct, next } = await evaluateAnswer(prevQ, text, topic);
 
   await ctx.reply(
-    `✅ Score: ${score}/10\n✅ Correct: ${correct}\n\n🧠 Next: ${next}`
+    `✅ Score: ${score}/10\n\n✅ Correct: ${correct}\n\n🧠 Next: ${next}`
   );
 
   await saveToNotion({
