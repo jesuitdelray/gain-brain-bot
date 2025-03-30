@@ -3,8 +3,10 @@ const axios = require("axios");
 const { Telegraf, Markup } = require("telegraf");
 const { OpenAI } = require("openai");
 const { Client } = require("@notionhq/client");
+const session = require("telegraf/session");
 require("dotenv").config();
 
+bot.use(session());
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const notion = new Client({ auth: process.env.NOTION_TOKEN });
@@ -138,13 +140,15 @@ bot.command("profile", async (ctx) => {
 
   await ctx.reply(
     `👤 @${username}
-  
-  📊 Total Questions: ${total}
-  🎯 Average Score: ${avg.toFixed(1)} / 10
-  📚 Current Topic: ${topic}`,
+      
+      📊 Total Questions: ${total}
+      🎯 Average Score: ${avg.toFixed(1)} / 10
+      📚 Current Topic: ${topic}`,
     Markup.inlineKeyboard([
-      [Markup.button.callback("📈 Detailed Stats", "detailed")],
-      [Markup.button.callback("🔁 Change Topic", "change_topic")],
+      [
+        Markup.button.callback("📈 Detailed Stats", "detailed"),
+        Markup.button.callback("🔁 Change Topic", "change_topic"),
+      ],
       [Markup.button.callback("🧹 Clear Stats", "clear_stats")],
     ])
   );
@@ -202,7 +206,7 @@ bot.action("detailed", async (ctx) => {
 
   const lines = Object.entries(grouped).map(([t, scores]) => {
     const avg = scores.reduce((a, b) => a + b, 0) / scores.length;
-    return `${t} — ${avg.toFixed(0)}%`;
+    return `${t} — ${avg.toFixed(0)} / 10`;
   });
 
   await ctx.reply(`🔍 Topic Breakdown:\n\n${lines.join("\n")}`);
