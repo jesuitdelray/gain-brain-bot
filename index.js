@@ -17,55 +17,86 @@ function truncate(str, length = 20) {
 }
 
 async function askGPT(question, topic) {
-  const messages = [
-    {
-      role: "system",
-      content: `
+  const system = {
+    role: "system",
+    content: `
 You are a quiz bot helping users learn about "${topic}".
 Ask short, specific questions.
 Respond using the following format:
 QUESTION: ...
-`,
-    },
-    { role: "user", content: question },
-  ];
+    `,
+  };
 
-  const chatResponse = await openai.chat.completions.create({
-    messages,
-    model: "gpt-4o-mini",
-  });
+  const user = { role: "user", content: question };
 
-  const text = chatResponse.choices[0].message.content.trim();
-  const match = text.match(/QUESTION:\s*(.*)/i);
-  return match ? match[1].trim() : text;
+  let messages = [system, user];
+  let text = "";
+
+  for (let i = 0; i < 2; i++) {
+    const res = await openai.chat.completions.create({
+      messages,
+      model: "gpt-4o-mini",
+    });
+    text = res.choices[0].message.content.trim();
+    const match = text.match(/QUESTION:\s*(.*)/i);
+    if (match) return match[1].trim();
+
+    messages.push({
+      role: "user",
+      content:
+        "Please follow the format strictly: QUESTION: (your next question)",
+    });
+  }
+
+  return text;
 }
 
 async function evaluateAnswer(question, userAnswer, topic) {
-  const messages = [
-    {
-      role: "system",
-      content: `
+  const system = {
+    role: "system",
+    content: `
 Evaluate the user's answer to the previous question on topic "${topic}".
 Respond with:
 SCORE: (0-10)
 CORRECT ANSWER: ...
 NEXT QUESTION: ...
-`,
-    },
-    { role: "user", content: userAnswer },
-  ];
+    `,
+  };
 
-  const chatResponse = await openai.chat.completions.create({
-    messages,
-    model: "gpt-4o-mini",
-  });
+  const user = { role: "user", content: userAnswer };
+  let messages = [system, user];
+  let text = "";
 
-  const text = chatResponse.choices[0].message.content.trim();
-  const score = parseInt(text.match(/SCORE:\s*(\d+)/i)?.[1] || 0);
-  const correct = text.match(/CORRECT ANSWER:\s*(.*)/i)?.[1]?.trim();
-  const next = text.match(/NEXT QUESTION:\s*(.*)/i)?.[1]?.trim();
+  for (let i = 0; i < 2; i++) {
+    const res = await openai.chat.completions.create({
+      messages,
+      model: "gpt-4o-mini",
+    });
+    text = res.choices[0].message.content.trim();
 
-  return { score, correct, next };
+    const score = parseInt(text.match(/SCORE:\s*(\d+)/i)?.[1] || 0);
+    const correct = text.match(/CORRECT ANSWER:\s*(.*)/i)?.[1]?.trim();
+    const next = text.match(/NEXT QUESTION:\s*(.*)/i)?.[1]?.trim();
+
+    if (score && correct && next) {
+      return { score, correct, next };
+    }
+
+    messages.push({
+      role: "user",
+      content: `Please strictly format your reply as:
+SCORE: (0-10)
+CORRECT ANSWER: ...
+NEXT QUESTION: ...
+      `,
+    });
+  }
+
+  return {
+    score: 0,
+    correct: "Invalid GPT response",
+    next: "Could not continue.",
+  };
 }
 
 async function saveToNotion({
@@ -118,10 +149,10 @@ bot.command("profile", async (ctx) => {
 
   await ctx.reply(
     `👤 @${username}
-
-📊 Total Questions: ${total}
-🎯 Average Score: ${avg.toFixed(1)} / 10
-📚 Current Topic: ${topic}`,
+  
+  📊 Total Questions: ${total}
+  🎯 Average Score: ${avg.toFixed(1)} / 10
+  📚 Current Topic: ${topic}`,
     Markup.inlineKeyboard([
       [Markup.button.callback("📈 Detailed Stats", "detailed")],
       [Markup.button.callback("🔁 Change Topic", "change_topic")],
