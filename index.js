@@ -240,6 +240,7 @@ bot.on("text", async (ctx) => {
     }
 
     userTopics.set(username, newTopic);
+    if (!ctx.session) ctx.session = {};
     ctx.session.topic = newTopic;
     const firstQuestion = await askGPT("Let's start", newTopic);
     userSessions.set(username, { lastQuestion: firstQuestion });
@@ -254,6 +255,7 @@ bot.on("text", async (ctx) => {
 
   if (pendingTopicUsers.has(username) || !userTopics.has(username)) {
     userTopics.set(username, text);
+    if (!ctx.session) ctx.session = {};
     ctx.session.topic = newTopic;
     pendingTopicUsers.delete(username);
 
@@ -298,6 +300,7 @@ bot.action("confirm_topic", async (ctx) => {
   const newTopic = ctx.session?.pendingTopic;
   if (newTopic) {
     userTopics.set(username, newTopic);
+    if (!ctx.session) ctx.session = {};
     ctx.session.topic = newTopic;
     const firstQ = await askGPT("Let's start", newTopic);
     userSessions.set(username, { lastQuestion: firstQ });
